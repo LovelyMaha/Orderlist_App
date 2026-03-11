@@ -6,9 +6,7 @@ data class Order(
     val address: String = "",
     val phoneNo: String = "",
     val whatsapp: String = "",
-    val itemsOrdered: String = "",
-    val itemsDispatched: String = "",
-    val itemsPending: String = ""
+    val itemsOrdered: String = ""
 ) {
     fun getItemList(): List<String> {
         return itemsOrdered.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -49,7 +47,10 @@ data class DispatchedOrder(
     val whatsapp: String = "",
     val itemsOrdered: String = "",
     val itemsDispatched: String = "",
-    val itemsPending: String = ""
+    val itemsPending: String = "",
+    val proofImage: String = "",
+    val courierName: String = "",
+    val llrNo: String = ""
 ) {
     fun getDispatchedItemList(): List<String> {
         return itemsDispatched.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -83,3 +84,10 @@ data class UnifiedOrder(
         return itemsDispatched.split(",").map { it.trim() }.filter { it.isNotEmpty() }
     }
 }
+
+// Image uploaded for an order (stored on PHP server)
+data class OrderImage(
+    val id: String = "",
+    val label: String = "",
+    val image: String = ""
+)

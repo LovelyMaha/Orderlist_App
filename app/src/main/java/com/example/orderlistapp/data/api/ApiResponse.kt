@@ -2,6 +2,7 @@ package com.example.orderlistapp.data.api
 
 import com.example.orderlistapp.data.model.DispatchedOrder
 import com.example.orderlistapp.data.model.Order
+import com.example.orderlistapp.data.model.OrderImage
 import com.example.orderlistapp.data.model.PendingFullOrder
 import com.example.orderlistapp.data.model.PendingMissingItem
 import com.example.orderlistapp.data.model.SummaryItem
@@ -42,4 +43,16 @@ data class SummaryResponse(
     @SerializedName("message") val message: String? = null
 )
 
+// PHP Image API responses
+data class UploadImageResponse(
+    @SerializedName("status")  val status:  String,
+    @SerializedName("image")   val image:   String? = null,
+    @SerializedName("label")   val label:   String? = null,
+    @SerializedName("message") val message: String? = null
+)
 
+data class GetImagesResponse(
+    @SerializedName("status") val status: String,
+    @SerializedName("images") val images: List<OrderImage>? = null,
+    @SerializedName("message") val message: String? = null
+)

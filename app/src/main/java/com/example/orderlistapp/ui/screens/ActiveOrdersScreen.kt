@@ -2,6 +2,8 @@ package com.example.orderlistapp.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -11,7 +13,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,8 +26,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.SpanStyle
@@ -51,7 +59,7 @@ private val WaGreen    = Color(0xFF25D366)
 private val CardBg     = Color(0xFFFFFFFF)
 private val SubText    = Color(0xFF546E7A)
 private val DividerClr = Color(0xFFECEFF1)
-private val Highlight  = Color(0xFFFFEB3B)   // yellow highlight for search matches
+private val Highlight  = Color(0xFFFFEB3B)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -156,7 +164,7 @@ fun ActiveOrdersScreen(viewModel: OrderViewModel, isAdmin: Boolean) {
                 CircularProgressIndicator(color = Navy)
             }
 
-            // ── Search Mode: show unified results ─────────────────────────
+            // ── Search Mode ──────────────────────────────────────────────
             searchQuery.isNotBlank() -> {
                 if (searchResults.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -176,7 +184,7 @@ fun ActiveOrdersScreen(viewModel: OrderViewModel, isAdmin: Boolean) {
                 }
             }
 
-            // ── Normal Mode: show active orders ───────────────────────────
+            // ── Normal Mode ───────────────────────────────────────────────
             orders.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("📭", fontSize = 52.sp)
@@ -204,7 +212,6 @@ private fun UnifiedOrderCard(order: UnifiedOrder, searchQuery: String) {
     val context = LocalContext.current
     val q = searchQuery.trim().lowercase()
 
-    // Source badge color
     val (badgeColor, badgeBg) = when (order.source) {
         "Active"     -> Pair(Navy, NavyBg)
         "Pending",
@@ -302,7 +309,6 @@ private fun UnifiedOrderCard(order: UnifiedOrder, searchQuery: String) {
             Row(modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
 
-                // Phone — clickable to dial
                 if (order.phoneNo.isNotBlank()) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -328,7 +334,6 @@ private fun UnifiedOrderCard(order: UnifiedOrder, searchQuery: String) {
                     }
                 }
 
-                // WhatsApp — clickable to open WhatsApp Business
                 if (order.whatsapp.isNotBlank()) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -337,10 +342,9 @@ private fun UnifiedOrderCard(order: UnifiedOrder, searchQuery: String) {
                             .background(Color(0xFFE8F5E9))
                             .clickable {
                                 val number = order.whatsapp.replace(Regex("[^0-9+]"), "")
-                                // Try WhatsApp Business first, fallback to regular WhatsApp
                                 val waUri = Uri.parse("https://wa.me/$number")
                                 val intent = Intent(Intent.ACTION_VIEW, waUri).apply {
-                                    setPackage("com.whatsapp.w4b") // WhatsApp Business
+                                    setPackage("com.whatsapp.w4b")
                                 }
                                 try {
                                     context.startActivity(intent)
@@ -349,10 +353,7 @@ private fun UnifiedOrderCard(order: UnifiedOrder, searchQuery: String) {
                                     try {
                                         context.startActivity(intent)
                                     } catch (e2: Exception) {
-                                        // fallback: open in browser
-                                        context.startActivity(
-                                            Intent(Intent.ACTION_VIEW, waUri)
-                                        )
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, waUri))
                                     }
                                 }
                             }
@@ -374,7 +375,7 @@ private fun UnifiedOrderCard(order: UnifiedOrder, searchQuery: String) {
             HorizontalDivider(color = DividerClr, thickness = 1.dp)
             Spacer(Modifier.height(10.dp))
 
-            // ── Items / Search highlight ───────────────────────────────────
+            // ── Items ──────────────────────────────────────────────────────
             Text("Order :", fontSize = 11.sp, color = SubText,
                 fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(6.dp))
@@ -430,9 +431,9 @@ private fun buildHighlightedText(text: String, query: String) =
     }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  OrderCard — Advanced layout (unchanged except phone/WA now clickable)
+//  OrderCard — Active orders only (packing + dispatch/pending + WhatsApp)
 // ─────────────────────────────────────────────────────────────────────────────
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun OrderCard(order: Order, viewModel: OrderViewModel) {
     var showDetails         by remember { mutableStateOf(false) }
@@ -441,6 +442,7 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
 
     val context = LocalContext.current
     val itemList = remember(order) { order.getItemList() }
+
     var checkedItems by remember(order) {
         mutableStateOf(itemList.associateWith { false }.toMutableMap())
     }
@@ -448,6 +450,26 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
     val allPacked   = itemList.isNotEmpty() && itemList.all { checkedItems[it] == true }
     val nonePacked  = itemList.all { checkedItems[it] == false }
     val packedCount = itemList.count { checkedItems[it] == true }
+
+    // ── Image Upload States ────────────────────────────────────────────────
+    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+    var imageLabel by remember { mutableStateOf("") }
+    val isUploading by viewModel.isUploadingImage.collectAsState()
+    val orderImagesMap by viewModel.orderImages.collectAsState()
+    val uploadedImages = orderImagesMap[order.phoneNo] ?: emptyList()
+
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            selectedImageUri = uri
+            imageLabel = ""
+        }
+    }
+
+    LaunchedEffect(showDetails) {
+        if (showDetails) {
+            viewModel.loadImagesForOrder(order.phoneNo)
+        }
+    }
 
     // ── Confirm Dispatch Dialog ────────────────────────────────────────────
     if (showConfirmDispatch) {
@@ -554,7 +576,6 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.Top
                 ) {
-                    // Left: customer name with avatar chip
                     Row(
                         modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.Top
@@ -600,20 +621,10 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                         }
                     }
 
-                    // Right: Phone + WA stacked — both clickable
+                    // Right: Phone + WA stacked
                     Column(horizontalAlignment = Alignment.End) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Phone No", fontSize = 10.sp, color = SubText,
-                                fontWeight = FontWeight.Medium, letterSpacing = 0.5.sp)
-                            Spacer(Modifier.width(4.dp))
-                            Icon(Icons.Default.Phone, contentDescription = null,
-                                tint = SubText, modifier = Modifier.size(11.dp))
-                        }
-                        Text(
-                            order.phoneNo,
-                            fontSize = 13.sp,
-                            color = Color(0xFF37474F),
-                            fontWeight = FontWeight.SemiBold,
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
                                 .clickable {
@@ -621,21 +632,22 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                                         Uri.parse("tel:${order.phoneNo}"))
                                     context.startActivity(intent)
                                 }
-                                .padding(2.dp)
-                        )
-                        if (order.whatsapp.isNotBlank()) {
-                            Spacer(Modifier.height(3.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("WB", fontSize = 10.sp, color = WaGreen,
-                                    fontWeight = FontWeight.Medium, letterSpacing = 0.5.sp)
-                                Spacer(Modifier.width(4.dp))
-                                Text("💬", fontSize = 11.sp)
-                            }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Icon(Icons.Default.Phone, contentDescription = "Call",
+                                tint = Navy, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
                             Text(
-                                order.whatsapp,
-                                fontSize = 13.sp,
-                                color = WaGreen,
-                                fontWeight = FontWeight.SemiBold,
+                                order.phoneNo,
+                                fontSize = 12.sp,
+                                color = Color(0xFF37474F),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        if (order.whatsapp.isNotBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
                                     .clickable {
@@ -654,13 +666,22 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                                             }
                                         }
                                     }
-                                    .padding(2.dp)
-                            )
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                Text("💬", fontSize = 13.sp)
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    order.whatsapp,
+                                    fontSize = 12.sp,
+                                    color = WaGreen,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
                 }
 
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(10.dp))
                 HorizontalDivider(color = DividerClr, thickness = 1.dp)
                 Spacer(Modifier.height(10.dp))
 
@@ -749,6 +770,132 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                     HorizontalDivider(color = DividerClr)
                     Spacer(Modifier.height(12.dp))
 
+                    // ── Image Upload & Display Section ─────────────────────
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Images", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Navy)
+                        Spacer(Modifier.weight(1f))
+                        IconButton(
+                            onClick = { launcher.launch("image/*") },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(NavyBg, CircleShape)
+                        ) {
+                            Icon(Icons.Default.AddAPhoto, contentDescription = "Add Image", tint = Navy, modifier = Modifier.size(18.dp))
+                        }
+                    }
+
+                    // Preview selected image before uploading
+                    if (selectedImageUri != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color.White, RoundedCornerShape(12.dp))
+                                .border(1.dp, DividerClr, RoundedCornerShape(12.dp))
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AsyncImage(
+                                model = selectedImageUri,
+                                contentDescription = "Preview",
+                                modifier = Modifier
+                                    .size(60.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(DividerClr),
+                                contentScale = ContentScale.Crop
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                OutlinedTextField(
+                                    value = imageLabel,
+                                    onValueChange = { imageLabel = it },
+                                    label = { Text("Label (e.g. Sample 1)", fontSize = 11.sp) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth().height(56.dp)
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = {
+                                            if (imageLabel.isNotBlank()) {
+                                                viewModel.uploadImageForOrder(context, order.phoneNo, imageLabel, selectedImageUri!!) { success ->
+                                                    android.widget.Toast.makeText(context, viewModel.message.value, android.widget.Toast.LENGTH_SHORT).show()
+                                                    if (success) {
+                                                        selectedImageUri = null
+                                                        imageLabel = ""
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        enabled = imageLabel.isNotBlank() && !isUploading,
+                                        modifier = Modifier.height(36.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Navy)
+                                    ) {
+                                        if (isUploading) {
+                                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                        } else {
+                                            Text("Upload", fontSize = 12.sp)
+                                        }
+                                    }
+                                    TextButton(onClick = { selectedImageUri = null }, modifier = Modifier.height(36.dp)) {
+                                        Text("Cancel", fontSize = 12.sp, color = Orange)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Display fetched images
+                    if (uploadedImages.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            items(uploadedImages) { img ->
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    val request = ImageRequest.Builder(LocalContext.current)
+                                        .data(img.image)
+                                        .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
+                                        .addHeader("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+                                        .crossfade(true)
+                                        .build()
+
+                                    Box {
+                                        AsyncImage(
+                                            model = request,
+                                            contentDescription = img.label,
+                                            modifier = Modifier
+                                                .size(80.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(NavyBg),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                        IconButton(
+                                            onClick = { viewModel.deleteImageForOrder(order.phoneNo, img.id) },
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(2.dp)
+                                                .size(22.dp)
+                                                .background(Color(0x99000000), CircleShape)
+                                        ) {
+                                            Icon(Icons.Default.Close, contentDescription = "Delete", tint = Color.White, modifier = Modifier.size(14.dp))
+                                        }
+                                    }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(img.label, fontSize = 11.sp, color = SubText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                    HorizontalDivider(color = DividerClr)
+                    Spacer(Modifier.height(12.dp))
+
                     // ── Packing Checklist ──────────────────────────────────
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -757,92 +904,93 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Inventory, contentDescription = null,
-                                tint = Navy, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
+                                tint = Navy, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
                             Text("Packing Checklist", fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp, color = Navy)
+                                fontSize = 13.sp, color = Navy)
                         }
-                        // Progress badge
                         Surface(
                             shape = RoundedCornerShape(50),
-                            color = if (allPacked) Green else if (nonePacked) Color(0xFFECEFF1)
-                                    else Orange
+                            color = if (allPacked) Green else if (nonePacked) Color(0xFFECEFF1) else Orange
                         ) {
                             Text(
-                                "$packedCount / ${itemList.size} packed",
-                                fontSize = 11.sp,
+                                "$packedCount / ${itemList.size}",
+                                fontSize = 10.sp,
                                 color = if (allPacked || !nonePacked) Color.White else SubText,
                                 fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                             )
                         }
                     }
 
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(8.dp))
 
-                    itemList.forEach { item ->
-                        val isPacked  = checkedItems[item] == true
-                        val rowBg     = if (isPacked) GreenLight else Color(0xFFF1F3F8)
-                        val borderClr = if (isPacked) Color(0xFF81C784) else Color(0xFFCFD8DC)
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .border(1.dp, borderClr, RoundedCornerShape(12.dp))
-                                .background(rowBg)
-                                .clickable {
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        itemList.forEach { item ->
+                            val isPacked = checkedItems[item] == true
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isPacked) GreenLight else Color(0xFFF1F3F8),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (isPacked) Color(0xFF81C784) else Color(0xFFCFD8DC)
+                                ),
+                                modifier = Modifier.clickable {
                                     checkedItems = checkedItems
                                         .toMutableMap()
                                         .also { it[item] = !isPacked }
                                 }
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(22.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (isPacked) Green else Color.White)
-                                    .border(1.5.dp,
-                                        if (isPacked) Green else Color(0xFFB0BEC5),
-                                        RoundedCornerShape(6.dp)),
-                                contentAlignment = Alignment.Center
                             ) {
-                                if (isPacked)
-                                    Icon(Icons.Default.Check, contentDescription = null,
-                                        tint = Color.White, modifier = Modifier.size(14.dp))
-                            }
-                            Spacer(Modifier.width(12.dp))
-                            Text(
-                                text = item,
-                                fontSize = 14.sp,
-                                color = if (isPacked) Color(0xFF388E3C) else Color(0xFF263238),
-                                fontWeight = if (isPacked) FontWeight.Medium else FontWeight.Normal,
-                                textDecoration = if (isPacked) TextDecoration.LineThrough else null,
-                                modifier = Modifier.weight(1f)
-                            )
-                            if (isPacked) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = "Packed",
-                                    tint = Green, modifier = Modifier.size(16.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(if (isPacked) Green else Color.White)
+                                            .border(
+                                                1.dp,
+                                                if (isPacked) Green else Color(0xFFB0BEC5),
+                                                RoundedCornerShape(4.dp)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (isPacked)
+                                            Icon(Icons.Default.Check, contentDescription = null,
+                                                tint = Color.White, modifier = Modifier.size(10.dp))
+                                    }
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        text = item,
+                                        fontSize = 12.sp,
+                                        color = if (isPacked) Color(0xFF388E3C) else Color(0xFF263238),
+                                        fontWeight = FontWeight.Medium,
+                                        textDecoration = if (isPacked) TextDecoration.LineThrough else null
+                                    )
+                                }
                             }
                         }
                     }
 
-                    Spacer(Modifier.height(18.dp))
+                    Spacer(Modifier.height(14.dp))
 
                     // ── Action Buttons ─────────────────────────────────────
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedButton(
                             onClick = { showConfirmPending = true },
                             modifier = Modifier
                                 .weight(1f)
-                                .height(46.dp),
-                            shape = RoundedCornerShape(12.dp),
+                                .height(42.dp),
+                            shape = RoundedCornerShape(10.dp),
                             border = androidx.compose.foundation.BorderStroke(1.5.dp, Orange),
                             colors = ButtonDefaults.outlinedButtonColors(
                                 contentColor = Orange,
@@ -850,9 +998,9 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                             )
                         ) {
                             Icon(Icons.Default.Inventory, contentDescription = null,
-                                modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Mark Packed", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Pending", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
 
                         Button(
@@ -860,25 +1008,75 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                             enabled = !nonePacked,
                             modifier = Modifier
                                 .weight(1f)
-                                .height(46.dp),
-                            shape = RoundedCornerShape(12.dp),
+                                .height(42.dp),
+                            shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (allPacked) Green else Navy,
                                 disabledContainerColor = Color(0xFFB0BEC5)
                             )
                         ) {
                             Icon(Icons.Default.LocalShipping, contentDescription = null,
-                                tint = Color.White, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
+                                tint = Color.White, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
                             Text(
                                 if (allPacked) "Dispatch All"
                                 else if (!nonePacked) "Dispatch ($packedCount)"
                                 else "Dispatch",
-                                fontSize = 13.sp,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
                         }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    // ── WhatsApp Send Button ─────────────────────────────────
+                    Button(
+                        onClick = {
+                            val status = when {
+                                allPacked  -> "All Dispatched"
+                                nonePacked -> "Undispatched"
+                                else       -> "Partially Dispatched"
+                            }
+                            val msg = buildString {
+                                append("---------------------------------\n")
+                                append("Order Details:\n\n")
+                                append("Name: ${order.customerName}\n")
+                                if (order.address.isNotBlank())
+                                    append("Address: ${order.address}\n")
+                                val phone = order.phoneNo.ifBlank { order.whatsapp }
+                                if (phone.isNotBlank())
+                                    append("Phone: $phone\n")
+                                append("Status: $status\n")
+                                append("---------------------------------\n")
+                            }
+                            val waNumber = order.whatsapp.ifBlank { order.phoneNo }
+                                .replace(Regex("[^0-9+]"), "")
+                            val waUri = Uri.parse("https://wa.me/$waNumber?text=${Uri.encode(msg)}")
+                            val intent = Intent(Intent.ACTION_VIEW, waUri).apply {
+                                setPackage("com.whatsapp.w4b")
+                            }
+                            try {
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                intent.setPackage("com.whatsapp")
+                                try { context.startActivity(intent) }
+                                catch (e2: Exception) {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, waUri))
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = WaGreen)
+                    ) {
+                        Text("\uD83D\uDCE8", fontSize = 14.sp)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Send via WhatsApp", fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold, color = Color.White)
                     }
                 }
             }

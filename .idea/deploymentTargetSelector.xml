@@ -4,7 +4,7 @@
     <selectionStates>
       <SelectionState runConfigName="app">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2026-02-28T15:39:25.371396200Z">
+        <DropdownSelection timestamp="2026-03-03T11:02:20.097428500Z">
           <Target type="DEFAULT_BOOT">
             <handle>
               <DeviceId pluginId="LocalEmulator" identifier="path=C:\Users\Hema\.android\avd\Copy_of_Dopanga.avd" />

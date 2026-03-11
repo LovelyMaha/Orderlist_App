@@ -413,20 +413,11 @@ private fun PendingOrderCard(
                         }
                     }
 
-                    // Right: Phone + WhatsApp
+                    // Right: Phone + WhatsApp — icons only, no labels
                     Column(horizontalAlignment = Alignment.End) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Phone No", fontSize = 10.sp, color = PSubText,
-                                fontWeight = FontWeight.Medium, letterSpacing = 0.5.sp)
-                            Spacer(Modifier.width(4.dp))
-                            Icon(Icons.Default.Phone, contentDescription = null,
-                                tint = PSubText, modifier = Modifier.size(11.dp))
-                        }
                         val context = LocalContext.current
-                        Text(
-                            phoneNo,
-                            fontSize = 13.sp, color = Color(0xFF37474F),
-                            fontWeight = FontWeight.SemiBold,
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
                                 .clickable {
@@ -434,20 +425,21 @@ private fun PendingOrderCard(
                                         Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNo"))
                                     )
                                 }
-                                .padding(2.dp)
-                        )
-                        if (whatsapp.isNotBlank()) {
-                            Spacer(Modifier.height(3.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("WB", fontSize = 10.sp, color = PWaGreen,
-                                    fontWeight = FontWeight.Medium, letterSpacing = 0.5.sp)
-                                Spacer(Modifier.width(4.dp))
-                                Text("💬", fontSize = 11.sp)
-                            }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Icon(Icons.Default.Phone, contentDescription = "Call",
+                                tint = PNavy, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
                             Text(
-                                whatsapp,
-                                fontSize = 13.sp, color = PWaGreen,
-                                fontWeight = FontWeight.SemiBold,
+                                phoneNo,
+                                fontSize = 12.sp, color = Color(0xFF37474F),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        if (whatsapp.isNotBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
                                     .clickable {
@@ -465,8 +457,16 @@ private fun PendingOrderCard(
                                             }
                                         }
                                     }
-                                    .padding(2.dp)
-                            )
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                Text("💬", fontSize = 13.sp)
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    whatsapp,
+                                    fontSize = 12.sp, color = PWaGreen,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
                 }

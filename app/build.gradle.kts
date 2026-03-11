@@ -68,6 +68,9 @@ dependencies {
     // Icons
     implementation("androidx.compose.material:material-icons-extended:1.6.8")
 
+    // Coil Image Loading
+    implementation("io.coil-kt:coil-compose:2.6.0")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
