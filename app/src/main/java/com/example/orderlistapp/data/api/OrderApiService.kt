@@ -89,6 +89,12 @@ interface OrderApiService {
         @Query("proofImageStatus") proofImageStatus: String = "",
         @Query("imageUrl") imageUrl: String = ""
     ): String
+
+    @GET(SCRIPT_PATH)
+    suspend fun deleteDispatchedOrders(
+        @Query("action") action: String = "deleteDispatchedOrders",
+        @Query("filterType") filterType: String
+    ): String
 }
 
 // ── PHP Image API (multipart upload + get images) ─────────────────────────────

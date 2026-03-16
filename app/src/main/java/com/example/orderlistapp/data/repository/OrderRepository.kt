@@ -1,5 +1,9 @@
 package com.example.orderlistapp.data.repository
 
+import com.example.orderlistapp.data.local.OrderDao
+import com.example.orderlistapp.data.local.OrderEntity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -27,7 +31,8 @@ sealed class Result<out T> {
     object Loading : Result<Nothing>()
 }
 
-class OrderRepository {
+
+class OrderRepository(private val orderDao: OrderDao) {
     private val api     = RetrofitClient.apiService
     private val phpApi  = PhpRetrofitClient.imageApiService
     private val gson    = Gson()
@@ -44,35 +49,28 @@ class OrderRepository {
         }
     }
 
-    private fun parseArrayResponse(raw: String): com.google.gson.JsonArray? {
-        return try {
-            @Suppress("DEPRECATION")
-            val elem = JsonParser().parse(raw.trim())
-            if (elem.isJsonArray) elem.asJsonArray else null
-        } catch (e: Exception) {
-            Log.e("OrderRepository", "JSON array parse error: ${e.message}\nRaw: $raw")
-            null
-        }
-    }
 
-    suspend fun getActiveOrders(): Result<List<Order>> {
-        return try {
+    suspend fun getActiveOrders(): Result<List<Order>> = withContext(Dispatchers.IO) {
+        try {
             val raw = api.getActiveOrders()
             val obj = parseResponse(raw)
             if (obj != null) {
                 val status = obj.get("status")?.asString ?: ""
                 if (status == "success") {
-                    val dataArray = obj.getAsJsonArray("data") ?: return Result.Success(emptyList())
+                    val dataArray = obj.getAsJsonArray("data") ?: return@withContext Result.Success(emptyList())
                     val orders = dataArray.map { gson.fromJson(it, Order::class.java) }
-                    return Result.Success(orders)
+                    return@withContext Result.Success(orders)
                 } else {
-                    return Result.Error(obj.get("message")?.asString ?: "Failed to fetch active orders")
+                    return@withContext Result.Error(obj.get("message")?.asString ?: "Failed to fetch active orders")
                 }
             } else {
-                val arr = parseArrayResponse(raw)
-                if (arr != null) {
+                try {
+                    @Suppress("DEPRECATION")
+                    val arr = JsonParser().parse(raw.trim()).asJsonArray
                     val orders = arr.map { gson.fromJson(it, Order::class.java) }
-                    return Result.Success(orders)
+                    return@withContext Result.Success(orders)
+                } catch (e: Exception) {
+                    Log.e("OrderRepository", "Json parse failed for active orders: $raw")
                 }
             }
             Result.Error("Invalid response from server")
@@ -82,24 +80,27 @@ class OrderRepository {
         }
     }
 
-    suspend fun getPendingFullOrders(): Result<List<PendingFullOrder>> {
-        return try {
+    suspend fun getPendingFullOrders(): Result<List<PendingFullOrder>> = withContext(Dispatchers.IO) {
+        try {
             val raw = api.getPendingFullOrders()
             val obj = parseResponse(raw)
             if (obj != null) {
                 val status = obj.get("status")?.asString ?: ""
                 if (status == "success") {
-                    val dataArray = obj.getAsJsonArray("data") ?: return Result.Success(emptyList())
+                    val dataArray = obj.getAsJsonArray("data") ?: return@withContext Result.Success(emptyList())
                     val orders = dataArray.map { gson.fromJson(it, PendingFullOrder::class.java) }
-                    return Result.Success(orders)
+                    return@withContext Result.Success(orders)
                 } else {
-                    return Result.Error(obj.get("message")?.asString ?: "Failed to fetch pending full orders")
+                    return@withContext Result.Error(obj.get("message")?.asString ?: "Failed to fetch pending full orders")
                 }
             } else {
-                val arr = parseArrayResponse(raw)
-                if (arr != null) {
+                try {
+                    @Suppress("DEPRECATION")
+                    val arr = JsonParser().parse(raw.trim()).asJsonArray
                     val orders = arr.map { gson.fromJson(it, PendingFullOrder::class.java) }
-                    return Result.Success(orders)
+                    return@withContext Result.Success(orders)
+                } catch (e: Exception) {
+                    Log.e("OrderRepository", "Json parse failed for pending full orders: $raw")
                 }
             }
             Result.Error("Invalid response from server")
@@ -109,24 +110,27 @@ class OrderRepository {
         }
     }
 
-    suspend fun getPendingMissingItems(): Result<List<PendingMissingItem>> {
-        return try {
+    suspend fun getPendingMissingItems(): Result<List<PendingMissingItem>> = withContext(Dispatchers.IO) {
+        try {
             val raw = api.getPendingMissingItems()
             val obj = parseResponse(raw)
             if (obj != null) {
                 val status = obj.get("status")?.asString ?: ""
                 if (status == "success") {
-                    val dataArray = obj.getAsJsonArray("data") ?: return Result.Success(emptyList())
+                    val dataArray = obj.getAsJsonArray("data") ?: return@withContext Result.Success(emptyList())
                     val items = dataArray.map { gson.fromJson(it, PendingMissingItem::class.java) }
-                    return Result.Success(items)
+                    return@withContext Result.Success(items)
                 } else {
-                    return Result.Error(obj.get("message")?.asString ?: "Failed to fetch missing items")
+                    return@withContext Result.Error(obj.get("message")?.asString ?: "Failed to fetch missing items")
                 }
             } else {
-                val arr = parseArrayResponse(raw)
-                if (arr != null) {
+                try {
+                    @Suppress("DEPRECATION")
+                    val arr = JsonParser().parse(raw.trim()).asJsonArray
                     val items = arr.map { gson.fromJson(it, PendingMissingItem::class.java) }
-                    return Result.Success(items)
+                    return@withContext Result.Success(items)
+                } catch (e: Exception) {
+                    Log.e("OrderRepository", "Json parse failed for missing items: $raw")
                 }
             }
             Result.Error("Invalid response from server")
@@ -136,24 +140,27 @@ class OrderRepository {
         }
     }
 
-    suspend fun getDispatchedOrders(): Result<List<DispatchedOrder>> {
-        return try {
+    suspend fun getDispatchedOrders(): Result<List<DispatchedOrder>> = withContext(Dispatchers.IO) {
+        try {
             val raw = api.getDispatchedOrders()
             val obj = parseResponse(raw)
             if (obj != null) {
                 val status = obj.get("status")?.asString ?: ""
                 if (status == "success") {
-                    val dataArray = obj.getAsJsonArray("data") ?: return Result.Success(emptyList())
+                    val dataArray = obj.getAsJsonArray("data") ?: return@withContext Result.Success(emptyList())
                     val orders = dataArray.map { gson.fromJson(it, DispatchedOrder::class.java) }
-                    return Result.Success(orders)
+                    return@withContext Result.Success(orders)
                 } else {
-                    return Result.Error(obj.get("message")?.asString ?: "Failed to fetch dispatched orders")
+                    return@withContext Result.Error(obj.get("message")?.asString ?: "Failed to fetch dispatched orders")
                 }
             } else {
-                val arr = parseArrayResponse(raw)
-                if (arr != null) {
+                try {
+                    @Suppress("DEPRECATION")
+                    val arr = JsonParser().parse(raw.trim()).asJsonArray
                     val orders = arr.map { gson.fromJson(it, DispatchedOrder::class.java) }
-                    return Result.Success(orders)
+                    return@withContext Result.Success(orders)
+                } catch (e: Exception) {
+                    Log.e("OrderRepository", "Json parse failed for dispatched orders: $raw")
                 }
             }
             Result.Error("Invalid response from server")
@@ -294,51 +301,46 @@ class OrderRepository {
         }
     }
 
-    suspend fun getSummary(): Result<List<SummaryItem>> {
+    suspend fun deleteDispatchedOrders(filterType: String): Result<String> {
         return try {
-            val raw = api.getSummary()
+            val raw = api.deleteDispatchedOrders(filterType = filterType)
             val obj = parseResponse(raw)
-            if (obj != null) {
-                val status = obj.get("status")?.asString ?: ""
-                if (status == "success") {
-                    val dataArray = obj.getAsJsonArray("data") ?: return Result.Success(emptyList())
-                    val items = dataArray.map { gson.fromJson(it, SummaryItem::class.java) }
-                    return Result.Success(items)
-                } else {
-                    return Result.Error(obj.get("message")?.asString ?: "Failed to fetch summary")
-                }
+                ?: return Result.Error("Invalid response from server")
+            val status = obj.get("status")?.asString ?: ""
+            if (status == "success") {
+                Result.Success(obj.get("message")?.asString ?: "Deleted dispatched orders")
             } else {
-                val arr = parseArrayResponse(raw)
-                if (arr != null) {
-                    val items = arr.map { gson.fromJson(it, SummaryItem::class.java) }
-                    return Result.Success(items)
-                }
+                Result.Error(obj.get("message")?.asString ?: "Failed to delete dispatched orders")
             }
-            Result.Error("Invalid response from server")
         } catch (e: Exception) {
-            Log.e("OrderRepository", "getSummary error: ${e.message}")
+            Log.e("OrderRepository", "deleteDispatchedOrders error: ${e.message}")
             Result.Error(e.localizedMessage ?: "Network error")
         }
     }
 
-    suspend fun getCouriers(): Result<List<String>> {
-        return try {
+
+    suspend fun getCouriers(): Result<List<String>> = withContext(Dispatchers.IO) {
+        try {
             val raw = api.getCouriers()
             val obj = parseResponse(raw)
             if (obj != null) {
                 val status = obj.get("status")?.asString ?: ""
                 if (status == "success") {
-                    val dataArray = obj.getAsJsonArray("data") ?: return Result.Success(emptyList())
+                    val dataArray = obj.getAsJsonArray("data") ?: return@withContext Result.Success(emptyList())
                     val couriers = dataArray.map { it.asString }
-                    return Result.Success(couriers)
+                    return@withContext Result.Success(couriers)
                 } else {
-                    return Result.Error(obj.get("message")?.asString ?: "Failed to fetch couriers")
+                    return@withContext Result.Error(obj.get("message")?.asString ?: "Failed to fetch couriers")
                 }
             } else {
-                val arr = parseArrayResponse(raw)
-                if (arr != null) {
+                // Fallback for raw array response
+                try {
+                    @Suppress("DEPRECATION")
+                    val arr = com.google.gson.JsonParser().parse(raw.trim()).asJsonArray
                     val couriers = arr.map { it.asString }
-                    return Result.Success(couriers)
+                    return@withContext Result.Success(couriers)
+                } catch (e: Exception) {
+                    Log.e("OrderRepository", "Json parse failed for couriers: $raw")
                 }
             }
             Result.Error("Invalid response from server")
@@ -425,4 +427,109 @@ class OrderRepository {
             Result.Error(e.localizedMessage ?: "Network error")
         }
     }
+
+    // ── Download Image to Cache safely ────────────────────────────────────────
+    suspend fun downloadImagesToCache(context: Context, images: List<OrderImage>, phoneNo: String): List<Uri> = withContext(Dispatchers.IO) {
+        val uris = mutableListOf<Uri>()
+        images.forEachIndexed { i, img ->
+            try {
+                val outFile = java.io.File(context.cacheDir, "wb_img_${phoneNo}_$i.jpg")
+                val conn = java.net.URL(img.image).openConnection() as java.net.HttpURLConnection
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+                conn.setRequestProperty("Accept", "image/*,*/*;q=0.8")
+                conn.connectTimeout = 15_000
+                conn.readTimeout = 30_000
+                conn.connect()
+                conn.inputStream.use { input ->
+                    outFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                conn.disconnect()
+                
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    outFile
+                )
+                uris.add(uri)
+            } catch (e: Exception) {
+                Log.e("OrderRepository", "download image error: ${e.message}")
+            }
+        }
+        uris
+    }
+
+    suspend fun syncActiveOrders() = withContext(Dispatchers.IO) {
+        val result = getActiveOrders()
+        if (result is Result.Success) {
+            val entities = result.data.map {
+                OrderEntity(
+                    phoneNo = it.phoneNo,
+                    orderDate = it.orderDate,
+                    customerName = it.customerName,
+                    address = it.address,
+                    whatsapp = it.whatsapp,
+                    itemsOrdered = it.itemsOrdered
+                )
+            }
+            orderDao.deleteAllActive()
+            orderDao.insertOrders(entities)
+        }
+    }
+
+    // ── WhatsApp API ────────────────────────────────────────
+    suspend fun sendWhatsAppDispatchApi(toPhone: String, customerName: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val client = okhttp3.OkHttpClient()
+            // Infobip real request: send to actual customer
+            val cleanPhone = toPhone.replace(Regex("[^0-9]"), "")
+            val formattedPhone = if (cleanPhone.length == 10) "91$cleanPhone" else cleanPhone
+            val messageId = java.util.UUID.randomUUID().toString()
+            
+            val bodyStr = "{\"messages\":[{\"from\":\"447860088970\",\"to\":\"$formattedPhone\",\"messageId\":\"$messageId\",\"content\":{\"templateName\":\"test_whatsapp_template_en\",\"templateData\":{\"body\":{\"placeholders\":[\"$customerName\"]}},\"language\":\"en\"}}]}"
+            val mediaType = "application/json".toMediaType()
+            val body = bodyStr.toRequestBody(mediaType)
+            
+            val request = okhttp3.Request.Builder()
+                .url("https://551p9g.api.infobip.com/whatsapp/1/message/template")
+                .method("POST", body)
+                .addHeader("Authorization", "App bb770f9639c68f98c87c9ed3112db021-434a699c-3e18-468b-9311-d55e9ee7647e")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Accept", "application/json")
+                .build()
+                
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string()
+            
+            Log.d("OrderRepository", "WhatsApp API Response: $responseBody")
+            
+            if (response.isSuccessful && responseBody != null) {
+                // Infobip returns 200 OK even if the message fails (e.g. REJECTED_DESTINATION_NOT_REGISTERED)
+                // We need to check the actual status inside the response JSON
+                try {
+                    val jsonResponse = org.json.JSONObject(responseBody)
+                    val messagesArray = jsonResponse.optJSONArray("messages")
+                    if (messagesArray != null && messagesArray.length() > 0) {
+                        val firstMessage = messagesArray.getJSONObject(0)
+                        val statusObj = firstMessage.optJSONObject("status")
+                        val groupName = statusObj?.optString("groupName")
+                        
+                        if (groupName == "REJECTED") {
+                            val description = statusObj.optString("description")
+                            Log.e("OrderRepository", "WhatsApp message rejected: $description")
+                            return@withContext false
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("OrderRepository", "Failed to parse WhatsApp response: ${e.message}")
+                }
+                true
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            Log.e("OrderRepository", "WhatsApp API error: ${e.message}")
+            false
+        }
+    }
 }
+

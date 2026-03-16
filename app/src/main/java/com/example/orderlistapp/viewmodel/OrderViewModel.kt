@@ -1,9 +1,13 @@
 package com.example.orderlistapp.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import android.content.Context
 import android.net.Uri
+import com.example.orderlistapp.data.local.AppDatabase
+import com.example.orderlistapp.data.local.OrderDao
+import com.example.orderlistapp.data.local.OrderEntity
 import com.example.orderlistapp.data.model.DispatchedOrder
 import com.example.orderlistapp.data.model.Order
 import com.example.orderlistapp.data.model.OrderImage
@@ -19,9 +23,16 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import androidx.work.Data
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import com.example.orderlistapp.data.worker.SyncWorker
 
-class OrderViewModel : ViewModel() {
-    private val repository = OrderRepository()
+class OrderViewModel(application: Application) : AndroidViewModel(application) {
+    private val database = AppDatabase.getDatabase(application)
+    private val orderDao = database.orderDao()
+    private val repository = OrderRepository(orderDao)
 
     // ---- Active Orders ----
     private val _activeOrders = MutableStateFlow<List<Order>>(emptyList())
@@ -51,6 +62,37 @@ class OrderViewModel : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
 
+    // ---- Local Dispatch Tracker ----
+    private val _dispatchStatusMap = MutableStateFlow<Map<String, Pair<String, Long>>>(emptyMap())
+    val dispatchStatusMap: StateFlow<Map<String, Pair<String, Long>>> = _dispatchStatusMap
+
+    init {
+        // Bind ActiveOrders UI strictly to Room Database Flow
+        viewModelScope.launch {
+            orderDao.getAllActiveOrders().collect { entities ->
+                val list = entities.map {
+                    Order(
+                        phoneNo = it.phoneNo,
+                        orderDate = it.orderDate,
+                        customerName = it.customerName,
+                        address = it.address,
+                        whatsapp = it.whatsapp,
+                        itemsOrdered = it.itemsOrdered
+                    )
+                }
+                _activeOrders.value = list
+                computeSummary(list)
+            }
+        }
+        
+        // Bind Dispatch statuses to track indicators (Green for SENT, Red for FAILED)
+        viewModelScope.launch {
+            orderDao.getDispatchedOrders().collect { entities ->
+                val map = entities.associate { it.phoneNo to Pair(it.messageStatus, it.dispatchTime) }
+                _dispatchStatusMap.value = map
+            }
+        }
+    }
     // ---- Error/Success Message ----
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message
@@ -67,9 +109,6 @@ class OrderViewModel : ViewModel() {
 
     private val _llrNumbers = MutableStateFlow<Map<String, String>>(emptyMap())
     val llrNumbers: StateFlow<Map<String, String>> = _llrNumbers
-
-    private val _proofImages = MutableStateFlow<Map<String, String>>(emptyMap())
-    val proofImages: StateFlow<Map<String, String>> = _proofImages
 
     // ---- PHP Image Upload States ----
     private val _orderImages = MutableStateFlow<Map<String, List<OrderImage>>>(emptyMap())
@@ -146,9 +185,6 @@ class OrderViewModel : ViewModel() {
         _llrNumbers.value = _llrNumbers.value.toMutableMap().apply { put(key, llr) }
     }
 
-    fun updateProofImage(key: String, uri: String) {
-        _proofImages.value = _proofImages.value.toMutableMap().apply { put(key, uri) }
-    }
     fun loadCouriers() {
         viewModelScope.launch {
             when (val result = repository.getCouriers()) {
@@ -252,65 +288,66 @@ class OrderViewModel : ViewModel() {
 
     fun clearMessage() { _message.value = null }
 
-    fun loadAllData() {
-        loadActiveOrders()
+    fun loadAllData(force: Boolean = false) {
+        syncActiveOrders(force)
         loadPendingFullOrders()
         loadPendingMissingItems()
         loadDispatchedOrders()
-        loadSummary()
         loadCouriers()
     }
-
-    fun loadActiveOrders() {
+    
+    fun syncActiveOrders(force: Boolean = true) {
         viewModelScope.launch {
-            _isLoading.value = true
-            when (val result = repository.getActiveOrders()) {
-                is Result.Success -> {
-                    _activeOrders.value = result.data
-                    computeSummary(result.data)
-                }
-                is Result.Error -> _message.value = result.message
-                else -> {}
+            // Check if we have offline data first
+            val offlineCount = orderDao.getActiveOrdersCount()
+            if (!force && offlineCount > 0) {
+                // If not forced and we have data, skin the network call entirely for instant boot!
+                return@launch
             }
+            
+            // Only show full-screen loading spinner if we have NO cached data
+            if (_activeOrders.value.isEmpty()) {
+                _isLoading.value = true
+            }
+
+            repository.syncActiveOrders()
             _isLoading.value = false
         }
     }
 
-    // Computes summary locally from the active orders — no extra API call needed
-    private fun computeSummary(orders: List<Order>) {
-        val rawMap = mutableMapOf<String, Int>()
-        orders.forEach { order ->
-            order.getItemList().forEach { itemString ->
-                // Extract name = everything before the trailing number
-                // e.g. "SuperNapier 200" -> name="SuperNapier", qty=200
-                val trimmed = itemString.trim()
-                val quantityMatch = Regex("(\\d+)\\s*$").find(trimmed)
-                val quantity = quantityMatch?.groupValues?.get(1)?.toIntOrNull() ?: 1
-                val name = if (quantityMatch != null)
-                    trimmed.substring(0, quantityMatch.range.first).trim()
-                else trimmed
-                if (name.isNotEmpty()) {
-                    rawMap[name] = rawMap.getOrDefault(name, 0) + quantity
-                }
-            }
-        }
-        _summaryItems.value = rawMap
-            .map { SummaryItem(itemName = it.key, totalQty = it.value) }
-            .sortedBy { it.itemName }
+    fun loadActiveOrders() {
+        // Explicit user refresh from the UI button should force the network
+        syncActiveOrders(force = true)
     }
 
-    // Refresh summary by reloading active orders
+    // Computes summary locally from the active orders — no extra API call needed
+    private fun computeSummary(orders: List<Order>) {
+        viewModelScope.launch(Dispatchers.Default) {
+            val rawMap = mutableMapOf<String, Int>()
+            orders.forEach { order ->
+                order.getItemList().forEach { itemString ->
+                    val trimmed = itemString.trim()
+                    val quantityMatch = Regex("(\\d+)\\s*$").find(trimmed)
+                    val quantity = quantityMatch?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                    val name = if (quantityMatch != null)
+                        trimmed.substring(0, quantityMatch.range.first).trim()
+                    else trimmed
+                    if (name.isNotEmpty()) {
+                        rawMap[name] = rawMap.getOrDefault(name, 0) + quantity
+                    }
+                }
+            }
+            _summaryItems.value = rawMap
+                .map { com.example.orderlistapp.data.model.SummaryItem(itemName = it.key, totalQty = it.value) }
+                .sortedBy { it.itemName }
+        }
+    }
+
+    // Refresh summary by reloading active orders (force network hit)
     fun loadSummary() {
         _isSummaryLoading.value = true
         viewModelScope.launch {
-            when (val result = repository.getActiveOrders()) {
-                is Result.Success -> {
-                    _activeOrders.value = result.data
-                    computeSummary(result.data)
-                }
-                is Result.Error -> _message.value = result.message
-                else -> {}
-            }
+            repository.syncActiveOrders()
             _isSummaryLoading.value = false
         }
     }
@@ -352,38 +389,69 @@ class OrderViewModel : ViewModel() {
         pendingItems: String
     ) {
         viewModelScope.launch {
-            _isLoading.value = true
-            val imageUrl = _orderImages.value[phoneNo]?.map { it.image }?.joinToString(", \n") ?: ""
-
-            when (val result = repository.markDispatched(customerName, phoneNo, dispatchedItems, pendingItems, imageUrl)) {
-                is Result.Success -> {
-                    val message = if (pendingItems.isNotBlank()) {
-                        "⚠️ Partially Dispatched! Missing items moved to Pending."
-                    } else {
-                        "✅ Order fully dispatched successfully!"
-                    }
-                    _message.value = message
-                    loadAllData()
-                }
-                is Result.Error -> _message.value = "❌ ${result.message}"
-                else -> {}
+            // 1. Instantly update UI (Optimistic Update)
+            val time = System.currentTimeMillis()
+            orderDao.markOrderAsDispatched(phoneNo, "QUEUED", time)
+            
+            val message = if (pendingItems.isNotBlank()) {
+                "⚠️ Partially Dispatched! Processing in background..."
+            } else {
+                "✅ Order dispatched! Processing in background..."
             }
-            _isLoading.value = false
+            
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                android.widget.Toast.makeText(
+                    getApplication<Application>(), 
+                    message, 
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+            
+            // 2. Queue the heavy API calls to WorkManager silently
+            val imageUrl = _orderImages.value[phoneNo]?.map { it.image }?.joinToString(", \n") ?: ""
+            val inputData = Data.Builder()
+                .putString("SYNC_TYPE", "DISPATCH")
+                .putString("CUSTOMER_NAME", customerName)
+                .putString("PHONE_NO", phoneNo)
+                .putString("DISPATCHED_ITEMS", dispatchedItems)
+                .putString("PENDING_ITEMS", pendingItems)
+                .putString("IMAGE_URL", imageUrl)
+                .build()
+
+            val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>()
+                .setInputData(inputData)
+                .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 10, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+
+            WorkManager.getInstance(getApplication()).enqueue(syncRequest)
         }
     }
 
     fun markFullPending(customerName: String, phoneNo: String) {
         viewModelScope.launch {
-            _isLoading.value = true
-            when (val result = repository.markFullPending(customerName, phoneNo)) {
-                is Result.Success -> {
-                    _message.value = "⚠️ Full order moved to Pending!"
-                    loadAllData()
-                }
-                is Result.Error -> _message.value = "❌ ${result.message}"
-                else -> {}
+            // Optimistic deletion from Active Screen
+            orderDao.markOrderAsDispatched(phoneNo, "PENDING", System.currentTimeMillis())
+            
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                android.widget.Toast.makeText(
+                    getApplication<Application>(), 
+                    "⚠️ Moving to Full Pending in background...", 
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
             }
-            _isLoading.value = false
+
+            val inputData = Data.Builder()
+                .putString("SYNC_TYPE", "PENDING")
+                .putString("CUSTOMER_NAME", customerName)
+                .putString("PHONE_NO", phoneNo)
+                .build()
+
+            val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>()
+                .setInputData(inputData)
+                .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 10, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+
+            WorkManager.getInstance(getApplication()).enqueue(syncRequest)
         }
     }
 
@@ -394,17 +462,31 @@ class OrderViewModel : ViewModel() {
         pendingItems: String
     ) {
         viewModelScope.launch {
-            _isLoading.value = true
-            val imageUrl = _orderImages.value[phoneNo]?.map { it.image }?.joinToString(", \n") ?: ""
-            when (val result = repository.markDispatchedFromPending(customerName, phoneNo, dispatchedItems, pendingItems, imageUrl)) {
-                is Result.Success -> {
-                    _message.value = "✅ Dispatched from Pending successfully!"
-                    loadAllData()
-                }
-                is Result.Error -> _message.value = "❌ ${result.message}"
-                else -> {}
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                android.widget.Toast.makeText(
+                    getApplication<Application>(), 
+                    "✅ Dispatching from Pending in background...", 
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
             }
-            _isLoading.value = false
+            
+            val imageUrl = _orderImages.value[phoneNo]?.map { it.image }?.joinToString(", \n") ?: ""
+
+            val inputData = Data.Builder()
+                .putString("SYNC_TYPE", "DISPATCH_FROM_PENDING")
+                .putString("CUSTOMER_NAME", customerName)
+                .putString("PHONE_NO", phoneNo)
+                .putString("DISPATCHED_ITEMS", dispatchedItems)
+                .putString("PENDING_ITEMS", pendingItems)
+                .putString("IMAGE_URL", imageUrl)
+                .build()
+
+            val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>()
+                .setInputData(inputData)
+                .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 10, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+
+            WorkManager.getInstance(getApplication()).enqueue(syncRequest)
         }
     }
 
@@ -424,7 +506,6 @@ class OrderViewModel : ViewModel() {
     }
     fun updateDispatchDetails(customerName: String, phoneNo: String, courierName: String, llrNo: String, proofImageStatus: String = "") {
         viewModelScope.launch {
-            _isLoading.value = true
             when (val result = repository.updateDispatchDetails(customerName, phoneNo, courierName, llrNo, proofImageStatus)) {
                 is Result.Success -> {
                     _message.value = "✅ Courier & LLR updated successfully!"
@@ -433,43 +514,68 @@ class OrderViewModel : ViewModel() {
                 is Result.Error -> _message.value = "❌ ${result.message}"
                 else -> {}
             }
-            _isLoading.value = false
         }
     }
 
-    fun removeProofImage(key: String) {
-        _proofImages.value = _proofImages.value.toMutableMap().apply { remove(key) }
-    }
+    // ---- Delete Dispatched Orders ----
+    private val _isDeletingDispatched = MutableStateFlow(false)
+    val isDeletingDispatched: StateFlow<Boolean> = _isDeletingDispatched
 
-    fun uploadProofImage(orderKey: String, uri: String, customerName: String, phoneNo: String, courierName: String, llrNo: String) {
-        // Update local state immediately
-        updateProofImage(orderKey, uri)
-        // Sync "Images upload" status to sheet
+    /**
+     * Removes dispatched orders via the Google Apps Script Backend.
+     * filterType: "previousDay"  -> delete orders whose orderDate < today
+     *             "previousWeek" -> delete orders whose orderDate < (today - 7 days)
+     *             "all"          -> delete every dispatched order
+     */
+    fun deleteDispatchedOrders(filterType: String) {
         viewModelScope.launch {
-            when (val result = repository.updateDispatchDetails(customerName, phoneNo, courierName, llrNo, "Images upload")) {
+            _isDeletingDispatched.value = true
+            when (val result = repository.deleteDispatchedOrders(filterType)) {
                 is Result.Success -> {
-                    _message.value = "✅ Image uploaded successfully!"
+                    _message.value = "✅ ${result.data}"
                     loadDispatchedOrders()
                 }
-                is Result.Error -> _message.value = "❌ Image sync failed: ${result.message}"
+                is Result.Error -> {
+                    _message.value = "❌ Delete failed: ${result.message}"
+                }
+                else -> {}
+            }
+            _isDeletingDispatched.value = false
+        }
+    }
+
+    // Set of phone numbers whose images have already been loaded this session
+    private val _imageLoadedSet = mutableSetOf<String>()
+
+    fun loadImagesForOrder(phoneNo: String, forceReload: Boolean = false) {
+        if (!forceReload && _imageLoadedSet.contains(phoneNo)) return // already fetched
+        viewModelScope.launch {
+            when (val result = repository.getOrderImages(phoneNo)) {
+                is Result.Success -> {
+                    val currentMap = _orderImages.value.toMutableMap()
+                    currentMap[phoneNo] = result.data
+                    _orderImages.value = currentMap
+                    _imageLoadedSet.add(phoneNo)
+                }
+                is Result.Error -> {
+                    android.util.Log.e("OrderViewModel", "Failed to load images for $phoneNo: ${result.message}")
+                }
                 else -> {}
             }
         }
     }
 
-    fun clearProofImage(orderKey: String, customerName: String, phoneNo: String, courierName: String, llrNo: String) {
-        // Clear local state immediately
-        removeProofImage(orderKey)
-        // Sync "Not Images upload" status to sheet
+    /**
+     * Downloads specific (selected) images for WhatsApp sharing.
+     */
+    fun downloadSpecificImagesForWhatsApp(context: Context, phoneNo: String, imagesToDownload: List<OrderImage>, onComplete: (List<Uri>) -> Unit) {
         viewModelScope.launch {
-            when (val result = repository.updateDispatchDetails(customerName, phoneNo, courierName, llrNo, "Not Images upload")) {
-                is Result.Success -> {
-                    _message.value = "✅ Image removed!"
-                    loadDispatchedOrders()
-                }
-                is Result.Error -> _message.value = "❌ Image clear failed: ${result.message}"
-                else -> {}
+            if (imagesToDownload.isEmpty()) {
+                onComplete(emptyList())
+                return@launch
             }
+            val uris = repository.downloadImagesToCache(context.applicationContext, imagesToDownload, phoneNo)
+            onComplete(uris)
         }
     }
 }

@@ -30,10 +30,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -43,9 +39,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.FileProvider
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.orderlistapp.data.model.Order
 import com.example.orderlistapp.data.model.UnifiedOrder
 import com.example.orderlistapp.viewmodel.OrderViewModel
+import java.io.File
 
 // ── Design Tokens ───────────────────────────────────────────────────────────
 private val Navy       = Color(0xFF1A237E)
@@ -70,7 +72,8 @@ fun ActiveOrdersScreen(viewModel: OrderViewModel, isAdmin: Boolean) {
     val searchResults by viewModel.searchResults.collectAsState()
     val focusManager  = LocalFocusManager.current
 
-    LaunchedEffect(Unit) { viewModel.loadActiveOrders() }
+    // Launching `loadAllData()` in MainDashboard handles initialization.
+    // We removed redundant `viewModel.loadActiveOrders()` here to prevent duplicate API hits.
 
     Column(
         modifier = Modifier
@@ -177,7 +180,7 @@ fun ActiveOrdersScreen(viewModel: OrderViewModel, isAdmin: Boolean) {
                     }
                 } else {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        items(searchResults) { result ->
+                        items(searchResults, key = { it.phoneNo + "_" + it.orderDate + "_" + it.source }) { result ->
                             UnifiedOrderCard(order = result, searchQuery = searchQuery)
                         }
                     }
@@ -195,7 +198,7 @@ fun ActiveOrdersScreen(viewModel: OrderViewModel, isAdmin: Boolean) {
             }
 
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                items(orders) { order ->
+                items(orders, key = { it.phoneNo + "_" + it.orderDate }) { order ->
                     OrderCard(order = order, viewModel = viewModel)
                 }
             }
@@ -220,7 +223,7 @@ private fun UnifiedOrderCard(order: UnifiedOrder, searchQuery: String) {
         else         -> Pair(SubText, DividerClr)
     }
 
-    val displayItems = order.getDisplayItems()
+    val displayItems = remember(order) { order.getDisplayItems() }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -455,13 +458,28 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var imageLabel by remember { mutableStateOf("") }
     val isUploading by viewModel.isUploadingImage.collectAsState()
-    val orderImagesMap by viewModel.orderImages.collectAsState()
-    val uploadedImages = orderImagesMap[order.phoneNo] ?: emptyList()
+    val orderImagesMapState = viewModel.orderImages.collectAsState()
+    val uploadedImages by remember(order.phoneNo) {
+        androidx.compose.runtime.derivedStateOf { orderImagesMapState.value[order.phoneNo] ?: emptyList() }
+    }
+    var showImageSourceSheet by remember { mutableStateOf(false) }
+    var fullScreenImageUrl by remember { mutableStateOf<String?>(null) }
+    var cameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    // Gallery launcher — auto-label: yyyy-MM-dd + phoneNo
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             selectedImageUri = uri
-            imageLabel = ""
+            val today = java.text.SimpleDateFormat("dd-MM-yyyy", java.util.Locale.getDefault()).format(java.util.Date())
+            imageLabel = "${today}_${order.phoneNo}"
+        }
+    }
+    // Camera launcher — auto-label: yyyy-MM-dd + phoneNo
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        if (success && cameraImageUri != null) {
+            selectedImageUri = cameraImageUri
+            val today = java.text.SimpleDateFormat("dd-MM-yyyy", java.util.Locale.getDefault()).format(java.util.Date())
+            imageLabel = "${today}_${order.phoneNo}"
         }
     }
 
@@ -778,13 +796,84 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                         Text("Images", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Navy)
                         Spacer(Modifier.weight(1f))
                         IconButton(
-                            onClick = { launcher.launch("image/*") },
+                            onClick = { showImageSourceSheet = true },
                             modifier = Modifier
                                 .size(36.dp)
                                 .background(NavyBg, CircleShape)
                         ) {
                             Icon(Icons.Default.AddAPhoto, contentDescription = "Add Image", tint = Navy, modifier = Modifier.size(18.dp))
                         }
+                    }
+
+                    // ── Camera / Gallery chooser bottom sheet ─────────────────
+                    if (showImageSourceSheet) {
+                        AlertDialog(
+                            onDismissRequest = { showImageSourceSheet = false },
+                            shape = RoundedCornerShape(20.dp),
+                            title = {
+                                Text("Select Image Source", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Navy)
+                            },
+                            text = {
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    // Camera option
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(NavyBg)
+                                            .clickable {
+                                                showImageSourceSheet = false
+                                                val tmpFile = File.createTempFile("cam_", ".jpg",
+                                                    context.externalCacheDir ?: context.cacheDir)
+                                                val uri = FileProvider.getUriForFile(
+                                                    context,
+                                                    "${context.packageName}.fileprovider",
+                                                    tmpFile
+                                                )
+                                                cameraImageUri = uri
+                                                cameraLauncher.launch(uri)
+                                            }
+                                            .padding(14.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.PhotoCamera, contentDescription = null,
+                                            tint = Navy, modifier = Modifier.size(22.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Column {
+                                            Text("Camera", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Navy)
+                                            Text("Take a new photo", fontSize = 11.sp, color = SubText)
+                                        }
+                                    }
+                                    // Gallery option
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(NavyBg)
+                                            .clickable {
+                                                showImageSourceSheet = false
+                                                galleryLauncher.launch("image/*")
+                                            }
+                                            .padding(14.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.PhotoLibrary, contentDescription = null,
+                                            tint = Navy, modifier = Modifier.size(22.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Column {
+                                            Text("Gallery", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Navy)
+                                            Text("Choose from gallery", fontSize = 11.sp, color = SubText)
+                                        }
+                                    }
+                                }
+                            },
+                            confirmButton = {},
+                            dismissButton = {
+                                TextButton(onClick = { showImageSourceSheet = false }) {
+                                    Text("Cancel", color = SubText)
+                                }
+                            }
+                        )
                     }
 
                     // Preview selected image before uploading
@@ -821,7 +910,7 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                                     Button(
                                         onClick = {
                                             if (imageLabel.isNotBlank()) {
-                                                viewModel.uploadImageForOrder(context, order.phoneNo, imageLabel, selectedImageUri!!) { success ->
+                                                viewModel.uploadImageForOrder(context.applicationContext, order.phoneNo, imageLabel, selectedImageUri!!) { success ->
                                                     android.widget.Toast.makeText(context, viewModel.message.value, android.widget.Toast.LENGTH_SHORT).show()
                                                     if (success) {
                                                         selectedImageUri = null
@@ -857,12 +946,15 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                         ) {
                             items(uploadedImages) { img ->
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    val request = ImageRequest.Builder(LocalContext.current)
-                                        .data(img.image)
-                                        .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-                                        .addHeader("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-                                        .crossfade(true)
-                                        .build()
+                                    val currentContext = LocalContext.current
+                                    val request = remember(img.image) {
+                                        ImageRequest.Builder(currentContext)
+                                            .data(img.image)
+                                            .addHeader("User-Agent", "Mozilla/5.0")
+                                            .addHeader("Accept", "image/*,*/*;q=0.8")
+                                            .crossfade(true)
+                                            .build()
+                                    }
 
                                     Box {
                                         AsyncImage(
@@ -871,7 +963,8 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                                             modifier = Modifier
                                                 .size(80.dp)
                                                 .clip(RoundedCornerShape(8.dp))
-                                                .background(NavyBg),
+                                                .background(NavyBg)
+                                                .clickable { fullScreenImageUrl = img.image },
                                             contentScale = ContentScale.Crop
                                         )
                                         IconButton(
@@ -887,6 +980,53 @@ fun OrderCard(order: Order, viewModel: OrderViewModel) {
                                     }
                                     Spacer(Modifier.height(4.dp))
                                     Text(img.label, fontSize = 11.sp, color = SubText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Full-screen image dialog ───────────────────────────
+                    fullScreenImageUrl?.let { imgUrl ->
+                        Dialog(
+                            onDismissRequest = { fullScreenImageUrl = null },
+                            properties = DialogProperties(usePlatformDefaultWidth = false)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color(0xE6000000))
+                                    .clickable { fullScreenImageUrl = null },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                val currentContext = LocalContext.current
+                                val fullReq = remember(imgUrl) {
+                                    ImageRequest.Builder(currentContext)
+                                        .data(imgUrl)
+                                        .addHeader("User-Agent", "Mozilla/5.0")
+                                        .addHeader("Accept", "image/*,*/*;q=0.8")
+                                        .crossfade(true)
+                                        .build()
+                                }
+                                AsyncImage(
+                                    model = fullReq,
+                                    contentDescription = "Full image",
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.95f)
+                                        .clip(RoundedCornerShape(16.dp)),
+                                    contentScale = ContentScale.FillWidth
+                                )
+                                // Close button
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(20.dp)
+                                        .size(36.dp)
+                                        .background(Color(0x99000000), CircleShape)
+                                        .clickable { fullScreenImageUrl = null },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Close",
+                                        tint = Color.White, modifier = Modifier.size(20.dp))
                                 }
                             }
                         }

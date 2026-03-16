@@ -30,7 +30,8 @@ fun MainDashboard(session: UserSession = UserSession("Admin", true)) {
 
     var selectedTab by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit) { orderViewModel.loadAllData() }
+    // Instant offline boot - don't force network sync
+    LaunchedEffect(Unit) { orderViewModel.loadAllData(force = false) }
 
     // Show snackbar messages
     val snackbarHostState = remember { SnackbarHostState() }
